@@ -150,6 +150,11 @@ class VoxelViewer:
         self.ax.set_zlabel('Z')
         self.ax.set_title(f'3D Voxel Model: {npy_path.name}')
         
+        # Force the axes to show the full 32x32x32 space
+        self.ax.set_xlim(0, 32)
+        self.ax.set_ylim(0, 32)
+        self.ax.set_zlim(0, 32)
+        
         # Save image to the same directory with .png extension
         image_path = npy_path.with_suffix('.png')
         self.figure.savefig(image_path, dpi=150, bbox_inches='tight')
