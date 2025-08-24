@@ -53,6 +53,25 @@ class ResidualBlock(nn.Module):
         h = h + t_emb
         return h + x  # 残差连接
 
+# 添加自注意力模块
+class SelfAttention3D(nn.Module):
+    """3D自注意力机制"""
+    def __init__(self, channels):
+        super().__init__()
+        self.query = nn.Conv3d(channels, channels // 8, 1)
+        self.key = nn.Conv3d(channels, channels // 8, 1)
+        self.value = nn.Conv3d(channels, channels, 1)
+        self.gamma = nn.Parameter(torch.zeros(1))
+
+    def forward(self, x):
+        batch, channels, depth, height, width = x.size()
+        query = self.query(x).view(batch, -1, depth * height * width).permute(0, 2, 1)
+        key = self.key(x).view(batch, -1, depth * height * width)
+        attention = torch.softmax(torch.bmm(query, key), dim=-1)
+        value = self.value(x).view(batch, -1, depth * height * width)
+        out = torch.bmm(value, attention.permute(0, 2, 1)).view(batch, channels, depth, height, width)
+        return self.gamma * out + x
+
 class UNet3D(nn.Module):
     """3D UNet网络结构"""
     def __init__(self, in_channels=1, time_emb_dim=256):
@@ -67,44 +86,42 @@ class UNet3D(nn.Module):
         # 下采样路径
         self.down1 = CustomSequential(
             ResidualBlock(in_channels, 32, time_emb_dim),
-            ResidualBlock(32, 32, time_emb_dim)
+            ResidualBlock(32, 32, time_emb_dim),
+            SelfAttention3D(32)  # 添加自注意力
         )
         self.down2 = CustomSequential(
-            nn.Conv3d(32, 64, 3, stride=2, padding=1),  # 下采样
-            ResidualBlock(64, 64, time_emb_dim)
+            nn.Conv3d(32, 128, 3, stride=2, padding=1),  # 下采样
+            ResidualBlock(128, 128, time_emb_dim),
+            SelfAttention3D(128)  # 添加自注意力
         )
         self.down3 = CustomSequential(
-            nn.Conv3d(64, 128, 3, stride=2, padding=1),  # 下采样
-            ResidualBlock(128, 128, time_emb_dim)
-        )
-        # 添加第4层下采样
-        self.down4 = CustomSequential(
-            nn.Conv3d(128, 256, 3, stride=2, padding=1),  # 下采样
-            ResidualBlock(256, 256, time_emb_dim)
+            nn.Conv3d(128, 256, 3, stride=2, padding=1),
+            ResidualBlock(256, 256, time_emb_dim),
+            SelfAttention3D(256)  # 添加自注意力
         )
         
         # 中间层
         self.middle = CustomSequential(
             ResidualBlock(256, 256, time_emb_dim),
-            ResidualBlock(256, 256, time_emb_dim)
+            SelfAttention3D(256),  # 添加自注意力
+            ResidualBlock(256, 256, time_emb_dim),
+            SelfAttention3D(256)  # 添加自注意力
         )
         
         # 上采样路径
-        # 添加第4层上采样
-        self.up4 = CustomSequential(
-            nn.ConvTranspose3d(256, 128, 4, stride=2, padding=1),  # 上采样
-            ResidualBlock(128, 128, time_emb_dim)
-        )
         self.up3 = CustomSequential(
-            nn.ConvTranspose3d(128, 64, 4, stride=2, padding=1),  # 上采样
-            ResidualBlock(64, 64, time_emb_dim)
+            nn.ConvTranspose3d(256, 128, 4, stride=2, padding=1),  # 上采样
+            ResidualBlock(128, 128, time_emb_dim),
+            SelfAttention3D(128)  # 添加自注意力
         )
         self.up2 = CustomSequential(
-            nn.ConvTranspose3d(64, 32, 4, stride=2, padding=1),
-            ResidualBlock(32, 32, time_emb_dim)
+            nn.ConvTranspose3d(128, 32, 4, stride=2, padding=1),
+            ResidualBlock(32, 32, time_emb_dim),
+            SelfAttention3D(32)  # 添加自注意力
         )
         self.up1 = CustomSequential(
             ResidualBlock(32, 32, time_emb_dim),
+            SelfAttention3D(32),  # 添加自注意力
             nn.Conv3d(32, in_channels, 3, padding=1)  # 输出层
         )
         
@@ -115,13 +132,11 @@ class UNet3D(nn.Module):
         down1 = self.down1(x, time_emb)
         down2 = self.down2(down1, time_emb)
         down3 = self.down3(down2, time_emb)
-        down4 = self.down4(down3, time_emb)  # 第4层下采样
         
         # 中间层
-        x = self.middle(down4, time_emb)
+        x = self.middle(down3, time_emb)
         
         # 上采样路径 + Skip Connection
-        x = self.up4(x, time_emb) + down3  # 第4层上采样
         x = self.up3(x, time_emb) + down2
         x = self.up2(x, time_emb) + down1
         x = self.up1(x, time_emb)

@@ -14,7 +14,7 @@ from tqdm import tqdm
 # 配置参数
 DATA_DIR = "blocks"         # HDF5数据目录
 SAVE_DIR = "checkpoints"    # 模型保存目录
-BATCH_SIZE = 16             # 批量大小（根据显存调整）
+BATCH_SIZE = 1             # 批量大小（根据显存调整）
 RESOLUTION = 32             # 体素分辨率
 EPOCHS = 1                # 训练轮数
 SAVE_INTERVAL = 1          # 模型保存间隔
