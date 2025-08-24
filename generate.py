@@ -39,4 +39,4 @@ def generate_and_save(model_path, output_dir="generated"):
 
 # 示例调用
 if __name__ == "__main__":
-    generated_voxel = generate_and_save("checkpoints/diffusion_20250823_2112_epoch200.pt")
+    generated_voxel = generate_and_save("checkpoints/diffusion_20250824_1927_epoch200.pt")
