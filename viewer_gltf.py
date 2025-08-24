@@ -131,8 +131,15 @@ class VoxelViewer:
                         cube = trimesh.creation.box(extents=(1, 1, 1))
                         cube.apply_translation((x + 0.5, y + 0.5, z + 0.5))
                         
-                        # Set the cube color to black
-                        cube.visual.face_colors = [0, 0, 0, 255]  # RGBA black
+                        # Set the cube color to gray with surface reflection
+                        cube.visual.face_colors = [169, 169, 169, 255]  # RGBA gray (169, 169, 169)
+                        
+                        # Add material properties for reflection and diffuse lighting
+                        cube.visual.material = trimesh.visual.material.PBRMaterial(
+                            baseColorFactor=[0.66, 0.66, 0.66, 1.0],  # Gray color
+                            metallicFactor=0.5,  # Add some reflectivity
+                            roughnessFactor=0.4  # Slightly smooth surface
+                        )
                         
                         # Add the cube to the list of meshes
                         meshes.append(cube)
