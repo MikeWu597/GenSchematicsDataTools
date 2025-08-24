@@ -6,11 +6,11 @@ from torch.utils.data.distributed import DistributedSampler
 from datetime import datetime
 
 # 导入数据加载器
-from data_loader import get_dataloader, MinecraftDataset  # 重要！必须添加这一行
+from data_loader_bert import get_text_dataloader, MinecraftTextDataset
 
 # 导入模型和扩散模型
-from model import UNet3D
-from diffusion import DiffusionModel
+from model_bert import UNet3DHybrid
+from diffusion_bert import DiffusionModelWithText
 from tqdm import tqdm
 import torch.multiprocessing as mp
 
@@ -19,7 +19,7 @@ from torch.utils.data import DataLoader
 
 # 配置参数
 DATA_DIR = "blocks"         # HDF5数据目录
-SAVE_DIR = "checkpoints"    # 模型保存目录
+SAVE_DIR = "checkpoints_bert"    # 模型保存目录
 BATCH_SIZE = 1             # 批量大小（根据显存调整）
 RESOLUTION = 32             # 体素分辨率
 EPOCHS = 1                # 训练轮数
@@ -27,7 +27,7 @@ SAVE_INTERVAL = 1          # 模型保存间隔
 
 def setup(rank, world_size):
     os.environ['MASTER_ADDR'] = 'localhost'
-    os.environ['MASTER_PORT'] = '12355'
+    os.environ['MASTER_PORT'] = '12356'  # 使用不同的端口避免冲突
     # 设置环境变量以减少内存碎片
     os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'expandable_segments:True'
     dist.init_process_group("nccl", rank=rank, world_size=world_size)
@@ -44,14 +44,23 @@ def main(rank, world_size):
     device = torch.device(f"cuda:{rank}")
     
     # 初始化数据集和分布式采样器
-    dataset = MinecraftDataset(DATA_DIR, RESOLUTION)
+    dataset = MinecraftTextDataset(DATA_DIR, RESOLUTION)
     sampler = DistributedSampler(dataset, num_replicas=world_size, rank=rank)
-    dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, sampler=sampler, num_workers=4)
+    dataloader = DataLoader(
+        dataset, 
+        batch_size=BATCH_SIZE, 
+        sampler=sampler, 
+        num_workers=4,
+        collate_fn=lambda batch: {
+            'voxels': torch.stack([item['voxel'] for item in batch]),
+            'texts': [item['text'] for item in batch]
+        }
+    )
     
     # 初始化模型
-    model = UNet3D().to(device)
+    model = UNet3DHybrid().to(device)
     model = DDP(model, device_ids=[rank])
-    diffusion = DiffusionModel(model, device=device)
+    diffusion = DiffusionModelWithText(model, device=device)
     
     # 优化器（建议使用AdamW）
     optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
@@ -71,7 +80,7 @@ def main(rank, world_size):
         progress_bar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{EPOCHS}") if rank == 0 else dataloader
         
         for batch in progress_bar:
-            batch = batch.to(device)
+            batch['voxels'] = batch['voxels'].to(device)
             loss = diffusion.train_step(batch, optimizer)
             total_loss += loss
             if rank == 0:
@@ -87,7 +96,7 @@ def main(rank, world_size):
         # 定期保存模型（只在主进程中保存）
         if rank == 0 and (epoch+1) % SAVE_INTERVAL == 0:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M")
-            save_path = os.path.join(SAVE_DIR, f"diffusion_{timestamp}_epoch{epoch+1}.pt")
+            save_path = os.path.join(SAVE_DIR, f"diffusion_bert_hybrid_{timestamp}_epoch{epoch+1}.pt")
             torch.save({
                 'model_state_dict': model.module.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),

@@ -3,11 +3,11 @@ import numpy as np
 from tqdm import tqdm
 import torch.nn.functional as F
 
-class DiffusionModel:
+class DiffusionModelWithText:
     def __init__(self, model, betas=(1e-4, 0.02), device="cuda"):
         """
-        扩散模型初始化
-        :param model: UNet3D模型
+        带文本条件的扩散模型初始化
+        :param model: UNet3DWithText模型
         :param betas: 扩散步长参数
         :param device: 设备（cuda/cpu）
         """
@@ -35,22 +35,27 @@ class DiffusionModel:
         x_t = torch.sqrt(alpha_bar) * x_0 + torch.sqrt(1 - alpha_bar) * noise
         return x_t, noise
     
-    def train_step(self, x_0, optimizer):
+    def train_step(self, batch, optimizer, use_latents=False):
         """
         单步训练：前向扩散 + 反向传播
-        :param x_0: 输入体素
+        :param batch: 包含体素、文本和潜在变量的批次数据
         :param optimizer: 优化器
+        :param use_latents: 是否使用潜在变量
         :return: 当前损失值
         """
         self.model.train()
-        x_0 = x_0.to(self.device)
+        x_0 = batch['voxels'].to(self.device)
+        texts = batch['texts']
         t = torch.randint(0, self.T, (x_0.shape[0],)).to(self.device)
         
         # 前向扩散
         x_t, noise = self.forward_diffusion(x_0, t)
         
+        # 处理潜在变量
+        latents = batch['latents'].to(self.device) if use_latents and 'latents' in batch else None
+        
         # 预测噪声
-        predicted_noise = self.model(x_t, t)
+        predicted_noise = self.model(x_t, t, texts, latents)
         
         # 计算损失
         loss = F.mse_loss(predicted_noise, noise)
@@ -63,18 +68,25 @@ class DiffusionModel:
         return loss.item()
     
     @torch.no_grad()
-    def sample(self, shape=(1, 1, 32, 32, 32)):
+    def sample(self, text_prompt, shape=(1, 1, 32, 32, 32)):
         """
-        从纯噪声生成样本
+        根据文本提示生成样本
+        :param text_prompt: 文本提示
         :param shape: 输出形状
         :return: 生成的体素数组
         """
         self.model.eval()
         x = torch.randn(shape).to(self.device)
         
+        # 重复文本提示以匹配批次大小
+        if isinstance(text_prompt, str):
+            texts = [text_prompt] * shape[0]
+        else:
+            texts = text_prompt
+            
         for t in reversed(range(self.T)):
             t_batch = torch.full((x.shape[0],), t, device=self.device)
-            predicted_noise = self.model(x, t_batch)
+            predicted_noise = self.model(x, t_batch, texts)
             
             # 去噪公式（简化版）
             alpha = self.alphas[t]
