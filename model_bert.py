@@ -5,7 +5,8 @@ import numpy as np
 from transformers import BertTokenizer, BertModel
 
 # 默认BERT模型路径配置
-DEFAULT_BERT_PATH = None  # 如果设置为本地路径，则加载本地BERT模型
+DEFAULT_BERT_PATH = "checkpoints/chinese-bert-wwm-ext"  # 如果设置为本地路径，则加载本地BERT模型
+DEFAULT_NON_BERT_MODEL_PATH = "checkpoints/diffusion_20250824_1927_epoch200.pt"  # 无约束模型路径配置
 
 class CustomSequential(nn.Sequential):
     """
@@ -173,23 +174,6 @@ class UNet3DWithText(nn.Module):
             SelfAttention3D(256)  # 添加自注意力
         )
         
-        # 上采样路径
-        self.up3 = CustomSequential(
-            nn.ConvTranspose3d(256, 128, 4, stride=2, padding=1),  # 上采样
-            ResidualBlock(128, 128, time_emb_dim),
-            SelfAttention3D(128)  # 添加自注意力
-        )
-        self.up2 = CustomSequential(
-            nn.ConvTranspose3d(128, 32, 4, stride=2, padding=1),
-            ResidualBlock(32, 32, time_emb_dim),
-            SelfAttention3D(32)  # 添加自注意力
-        )
-        self.up1 = CustomSequential(
-            ResidualBlock(32, 32, time_emb_dim),
-            SelfAttention3D(32),  # 添加自注意力
-            nn.Conv3d(32, in_channels, 3, padding=1)  # 输出层
-        )
-        
     def forward(self, x, t, text=None):
         # 文本编码
         if text is not None:
@@ -269,6 +253,25 @@ class UNet3DHybrid(nn.Module):
             SelfAttention3D(32),  # 添加自注意力
             nn.Conv3d(32, in_channels, 3, padding=1)  # 输出层
         )
+    
+    def load_unconstrained_model_weights(self, model_path=None):
+        """加载无约束（非文本条件）模型的权重"""
+        if model_path is None and DEFAULT_NON_BERT_MODEL_PATH is None:
+            raise ValueError("无约束模型路径未设置，请提供路径")
+            
+        load_path = model_path if model_path is not None else DEFAULT_NON_BERT_MODEL_PATH
+        
+        # 加载无约束模型权重
+        state_dict = torch.load(load_path)
+        
+        # 过滤出当前模型需要的权重
+        filtered_state_dict = {
+            k: v for k, v in state_dict.items() if k in self.state_dict()
+        }
+        
+        # 加载权重
+        self.load_state_dict(filtered_state_dict, strict=False)
+        print(f"加载无约束模型权重成功: {load_path}")
         
     def forward(self, x, t, text=None):
         # 文本编码

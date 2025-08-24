@@ -35,12 +35,11 @@ class DiffusionModelWithText:
         x_t = torch.sqrt(alpha_bar) * x_0 + torch.sqrt(1 - alpha_bar) * noise
         return x_t, noise
     
-    def train_step(self, batch, optimizer, use_latents=False):
+    def train_step(self, batch, optimizer):
         """
         单步训练：前向扩散 + 反向传播
-        :param batch: 包含体素、文本和潜在变量的批次数据
+        :param batch: 包含体素和文本的批次数据
         :param optimizer: 优化器
-        :param use_latents: 是否使用潜在变量
         :return: 当前损失值
         """
         self.model.train()
@@ -51,11 +50,8 @@ class DiffusionModelWithText:
         # 前向扩散
         x_t, noise = self.forward_diffusion(x_0, t)
         
-        # 处理潜在变量
-        latents = batch['latents'].to(self.device) if use_latents and 'latents' in batch else None
-        
         # 预测噪声
-        predicted_noise = self.model(x_t, t, texts, latents)
+        predicted_noise = self.model(x_t, t, texts)
         
         # 计算损失
         loss = F.mse_loss(predicted_noise, noise)
