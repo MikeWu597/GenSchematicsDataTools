@@ -17,7 +17,7 @@ class DiffusionModel:
         
         # Beta调度（线性增加）
         self.beta_start, self.beta_end = betas
-        self.T = 2000  # 时间步总数
+        self.T = 1000  # 时间步总数
         
         # 预计算扩散参数
         self.betas = torch.linspace(betas[0], betas[1], self.T).to(device)
