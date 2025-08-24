@@ -70,11 +70,16 @@ class UNet3D(nn.Module):
             ResidualBlock(32, 32, time_emb_dim)
         )
         self.down2 = CustomSequential(
-            nn.Conv3d(32, 128, 3, stride=2, padding=1),  # 下采样
-            ResidualBlock(128, 128, time_emb_dim)
+            nn.Conv3d(32, 64, 3, stride=2, padding=1),  # 下采样
+            ResidualBlock(64, 64, time_emb_dim)
         )
         self.down3 = CustomSequential(
-            nn.Conv3d(128, 256, 3, stride=2, padding=1),
+            nn.Conv3d(64, 128, 3, stride=2, padding=1),  # 下采样
+            ResidualBlock(128, 128, time_emb_dim)
+        )
+        # 添加第4层下采样
+        self.down4 = CustomSequential(
+            nn.Conv3d(128, 256, 3, stride=2, padding=1),  # 下采样
             ResidualBlock(256, 256, time_emb_dim)
         )
         
@@ -85,12 +90,17 @@ class UNet3D(nn.Module):
         )
         
         # 上采样路径
-        self.up3 = CustomSequential(
+        # 添加第4层上采样
+        self.up4 = CustomSequential(
             nn.ConvTranspose3d(256, 128, 4, stride=2, padding=1),  # 上采样
             ResidualBlock(128, 128, time_emb_dim)
         )
+        self.up3 = CustomSequential(
+            nn.ConvTranspose3d(128, 64, 4, stride=2, padding=1),  # 上采样
+            ResidualBlock(64, 64, time_emb_dim)
+        )
         self.up2 = CustomSequential(
-            nn.ConvTranspose3d(128, 32, 4, stride=2, padding=1),
+            nn.ConvTranspose3d(64, 32, 4, stride=2, padding=1),
             ResidualBlock(32, 32, time_emb_dim)
         )
         self.up1 = CustomSequential(
@@ -105,11 +115,13 @@ class UNet3D(nn.Module):
         down1 = self.down1(x, time_emb)
         down2 = self.down2(down1, time_emb)
         down3 = self.down3(down2, time_emb)
+        down4 = self.down4(down3, time_emb)  # 第4层下采样
         
         # 中间层
-        x = self.middle(down3, time_emb)
+        x = self.middle(down4, time_emb)
         
         # 上采样路径 + Skip Connection
+        x = self.up4(x, time_emb) + down3  # 第4层上采样
         x = self.up3(x, time_emb) + down2
         x = self.up2(x, time_emb) + down1
         x = self.up1(x, time_emb)
