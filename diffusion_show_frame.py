@@ -17,7 +17,7 @@ class DiffusionModel:
         
         # Beta调度（线性增加）
         self.beta_start, self.beta_end = betas
-        self.T = 1000  # 时间步总数
+        self.T = 2000  # 时间步总数
         
         # 预计算扩散参数
         self.betas = torch.linspace(betas[0], betas[1], self.T).to(device)
@@ -84,10 +84,6 @@ class DiffusionModel:
             
             noise_factor = (1 - alpha) / torch.sqrt(1 - alpha_bar)
             x = (x - noise_factor * predicted_noise) / torch.sqrt(alpha)
-            
-            if t > 0:
-                noise = torch.randn_like(x)
-                x += torch.sqrt(beta) * noise
 
             if t % 100 == 0:
                 print(f"Sampling step {t} completed")
@@ -99,6 +95,10 @@ class DiffusionModel:
                 os.makedirs("frames", exist_ok=True)
                 frame_path = os.path.join("frames", f"frame_{t}.npy")
                 np.save(frame_path, frame_data)
+            
+            if t > 0:
+                noise = torch.randn_like(x)
+                x += torch.sqrt(beta) * noise
                 
         # 转换回二值体素
         x = torch.sigmoid(x)
