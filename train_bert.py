@@ -120,6 +120,8 @@ def main(rank, world_size, use_cuda=True):
     
     if frozen_params:
         print(f"[进程 {rank}] 冻结了 {len(frozen_params)} 个BERT相关参数")
+        for name in frozen_params:
+            print(f"[进程 {rank}] 冻结参数: {name}")
     else:
         print(f"[进程 {rank}] 没有需要冻结的参数")
     
@@ -127,9 +129,11 @@ def main(rank, world_size, use_cuda=True):
     if use_cuda and torch.cuda.is_available() and world_size > 1 and dist.is_initialized():
         model = DDP(model, device_ids=[rank])
         diffusion = DiffusionModelWithText(model, device=device)
+        print(f"[进程 {rank}] 模型已包装为DDP")
     else:
         # CPU或单GPU训练
         diffusion = DiffusionModelWithText(model, device=device)
+        print(f"[进程 {rank}] 使用单设备训练模式")
     
     # 优化器（只优化非冻结参数）
     trainable_params = list(filter(lambda p: p.requires_grad, model.parameters()))
