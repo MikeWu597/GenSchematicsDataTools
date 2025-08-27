@@ -3,10 +3,15 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 from transformers import BertTokenizer, BertModel
+import os
 
-# 默认BERT模型路径配置
-DEFAULT_BERT_PATH = "checkpoints/chinese-bert-wwm-ext"  # 如果设置为本地路径，则加载本地BERT模型
-DEFAULT_NON_BERT_MODEL_PATH = "checkpoints/diffusion_20250824_1927_epoch200.pt"  # 无约束模型路径配置
+# 获取当前运行目录
+current_dir = os.getcwd()
+
+# 拼接本地路径
+DEFAULT_BERT_PATH = os.path.join(current_dir, "checkpoints", "bert-base-chinese")
+DEFAULT_NON_BERT_MODEL_PATH = os.path.join(current_dir, "checkpoints", "diffusion_20250824_1927_epoch200.pt")
+
 
 class CustomSequential(nn.Sequential):
     """
@@ -42,8 +47,8 @@ class TextEncoder(nn.Module):
         super().__init__()
         self.model_name = DEFAULT_BERT_PATH if DEFAULT_BERT_PATH else model_name
         
-        self.tokenizer = BertTokenizer.from_pretrained(self.model_name)
-        self.bert = BertModel.from_pretrained(self.model_name)
+        self.tokenizer = BertTokenizer.from_pretrained(self.model_name, local_files_only=True)
+        self.bert = BertModel.from_pretrained(self.model_name, local_files_only=True)
         
         if freeze_bert:
             # 冻结BERT参数以避免微调
