@@ -7,50 +7,27 @@ import os
 
 # 默认模型路径配置
 DEFAULT_CHECKPOINT_PATH = "checkpoints_bert/diffusion_bert_hybrid_20250824_1927_epoch200.pt"  # 默认Minecraft模型路径
-BERT_PATH = None  # 如果设置为本地BERT模型路径，则使用本地BERT模型（会覆盖model_bert.py中的DEFAULT_BERT_PATH）
-NON_BERT_MODEL_PATH = "checkpoints/diffusion_20250824_1927_epoch200.pt"  # 无约束模型路径配置
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"  # 自动选择设备
 
 def load_model(checkpoint_path):
     """加载训练好的模型"""
     print(f"开始加载模型，设备: {DEVICE}")
-    # 如果指定了本地BERT路径，则更新DEFAULT_BERT_PATH
-    if BERT_PATH:
-        import model_bert
-        model_bert.DEFAULT_BERT_PATH = BERT_PATH
-        print(f"使用自定义BERT路径: {BERT_PATH}")
     
     model = UNet3DHybrid()
     print("UNet3DHybrid模型初始化完成")
     
-    # 如果指定了无约束模型路径，则加载预训练权重
-    if NON_BERT_MODEL_PATH and os.path.exists(NON_BERT_MODEL_PATH):
-        try:
-            print(f"尝试加载无约束模型权重从 {NON_BERT_MODEL_PATH}")
-            checkpoint = torch.load(NON_BERT_MODEL_PATH, map_location=DEVICE)
-            # 加载匹配的权重
-            model_dict = model.state_dict()
-            pretrained_dict = {k: v for k, v in checkpoint['model_state_dict'].items() if k in model_dict and model_dict[k].shape == v.shape}
-            model_dict.update(pretrained_dict)
-            model.load_state_dict(model_dict)
-            print(f"成功加载无约束模型权重从 {NON_BERT_MODEL_PATH}")
-        except Exception as e:
-            print(f"加载无约束模型权重失败: {e}")
-    elif NON_BERT_MODEL_PATH:
-        print(f"无约束模型文件 {NON_BERT_MODEL_PATH} 不存在")
-    
-    # 加载混合模型权重（如果有）
+    # 直接从融合模型路径加载权重
     if os.path.exists(checkpoint_path):
         try:
-            print(f"尝试加载混合模型权重从 {checkpoint_path}")
+            print(f"尝试加载融合模型权重从 {checkpoint_path}")
             checkpoint = torch.load(checkpoint_path, map_location=DEVICE)
             model.load_state_dict(checkpoint['model_state_dict'])
-            print(f"成功加载混合模型权重从 {checkpoint_path}")
+            print(f"成功加载融合模型权重从 {checkpoint_path}")
         except Exception as e:
-            print(f"加载混合模型权重失败: {e}")
+            print(f"加载融合模型权重失败: {e}")
     else:
-        print(f"混合模型文件 {checkpoint_path} 不存在")
+        print(f"融合模型文件 {checkpoint_path} 不存在")
     
     return model
 
