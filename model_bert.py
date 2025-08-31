@@ -124,20 +124,56 @@ class ResidualBlock(nn.Module):
 
 class SelfAttention3D(nn.Module):
     """3D自注意力机制"""
-    def __init__(self, channels):
+    def __init__(self, channels, text_emb_dim=256):
         super().__init__()
         self.query = nn.Conv3d(channels, channels // 8, 1)
         self.key = nn.Conv3d(channels, channels // 8, 1)
         self.value = nn.Conv3d(channels, channels, 1)
         self.gamma = nn.Parameter(torch.zeros(1))
+        
+        # 添加文本条件投影层
+        self.text_key_proj = nn.Linear(text_emb_dim, channels // 8)
+        self.text_value_proj = nn.Linear(text_emb_dim, channels)
 
     def forward(self, x, t=None, text_emb=None):
         batch, channels, depth, height, width = x.size()
-        query = self.query(x).view(batch, -1, depth * height * width).permute(0, 2, 1)
-        key = self.key(x).view(batch, -1, depth * height * width)
-        attention = torch.softmax(torch.bmm(query, key), dim=-1)
-        value = self.value(x).view(batch, -1, depth * height * width)
-        out = torch.bmm(value, attention.permute(0, 2, 1)).view(batch, channels, depth, height, width)
+        
+        # 如果提供了文本嵌入，则使用交叉注意力
+        if text_emb is not None:
+            # 投影文本嵌入
+            text_key = self.text_key_proj(text_emb)   # [B, channels // 8]
+            text_value = self.text_value_proj(text_emb)  # [B, channels]
+            
+            # 重塑文本嵌入以匹配注意力计算
+            text_key = text_key.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(-1, -1, depth, height, width)
+            text_value = text_value.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(-1, -1, depth, height, width)
+            
+            # 计算query
+            query = self.query(x).view(batch, -1, depth * height * width).permute(0, 2, 1)
+            
+            # 计算key并结合文本信息
+            img_key = self.key(x).view(batch, -1, depth * height * width)
+            text_key = text_key.view(batch, -1, depth * height * width)
+            combined_key = img_key + text_key
+            
+            # 计算注意力权重
+            attention = torch.softmax(torch.bmm(query, combined_key), dim=-1)
+            
+            # 计算value并结合文本信息
+            img_value = self.value(x).view(batch, -1, depth * height * width)
+            text_value = text_value.view(batch, -1, depth * height * width)
+            combined_value = img_value + text_value
+            
+            # 应用注意力权重
+            out = torch.bmm(combined_value, attention.permute(0, 2, 1)).view(batch, channels, depth, height, width)
+        else:
+            # 标准自注意力机制
+            query = self.query(x).view(batch, -1, depth * height * width).permute(0, 2, 1)
+            key = self.key(x).view(batch, -1, depth * height * width)
+            attention = torch.softmax(torch.bmm(query, key), dim=-1)
+            value = self.value(x).view(batch, -1, depth * height * width)
+            out = torch.bmm(value, attention.permute(0, 2, 1)).view(batch, channels, depth, height, width)
+            
         return self.gamma * out + x
 
 class UNet3DWithText(nn.Module):
@@ -158,27 +194,44 @@ class UNet3DWithText(nn.Module):
         self.down1 = CustomSequential(
             ResidualBlock(in_channels, 32, time_emb_dim),
             ResidualBlock(32, 32, time_emb_dim),
-            SelfAttention3D(32)  # 添加自注意力
+            SelfAttention3D(32, time_emb_dim)  # 添加自注意力
         )
         self.down2 = CustomSequential(
             nn.Conv3d(32, 128, 3, stride=2, padding=1),  # 下采样
             ResidualBlock(128, 128, time_emb_dim),
-            SelfAttention3D(128)  # 添加自注意力
+            SelfAttention3D(128, time_emb_dim)  # 添加自注意力
         )
         self.down3 = CustomSequential(
             nn.Conv3d(128, 256, 3, stride=2, padding=1),
             ResidualBlock(256, 256, time_emb_dim),
-            SelfAttention3D(256)  # 添加自注意力
+            SelfAttention3D(256, time_emb_dim)  # 添加自注意力
         )
         
         # 中间层
         self.middle = CustomSequential(
             ResidualBlock(256, 256, time_emb_dim),
-            SelfAttention3D(256),  # 添加自注意力
+            SelfAttention3D(256, time_emb_dim),  # 添加自注意力
             ResidualBlock(256, 256, time_emb_dim),
-            SelfAttention3D(256)  # 添加自注意力
+            SelfAttention3D(256, time_emb_dim)  # 添加自注意力
         )
         
+        # 上采样路径
+        self.up3 = CustomSequential(
+            nn.ConvTranspose3d(256, 128, 4, stride=2, padding=1),  # 上采样
+            ResidualBlock(128, 128, time_emb_dim),
+            SelfAttention3D(128, time_emb_dim)  # 添加自注意力
+        )
+        self.up2 = CustomSequential(
+            nn.ConvTranspose3d(128, 32, 4, stride=2, padding=1),
+            ResidualBlock(32, 32, time_emb_dim),
+            SelfAttention3D(32, time_emb_dim)  # 添加自注意力
+        )
+        self.up1 = CustomSequential(
+            ResidualBlock(32, 32, time_emb_dim),
+            SelfAttention3D(32, time_emb_dim),  # 添加自注意力
+            nn.Conv3d(32, in_channels, 3, padding=1)  # 输出层
+        )
+    
     def forward(self, x, t, text=None):
         # 文本编码
         if text is not None:
@@ -221,41 +274,41 @@ class UNet3DHybrid(nn.Module):
         self.down1 = CustomSequential(
             ResidualBlock(in_channels, 32, time_emb_dim),
             ResidualBlock(32, 32, time_emb_dim),
-            SelfAttention3D(32)  # 添加自注意力
+            SelfAttention3D(32, time_emb_dim)  # 添加自注意力
         )
         self.down2 = CustomSequential(
             nn.Conv3d(32, 128, 3, stride=2, padding=1),  # 下采样
             ResidualBlock(128, 128, time_emb_dim),
-            SelfAttention3D(128)  # 添加自注意力
+            SelfAttention3D(128, time_emb_dim)  # 添加自注意力
         )
         self.down3 = CustomSequential(
             nn.Conv3d(128, 256, 3, stride=2, padding=1),
             ResidualBlock(256, 256, time_emb_dim),
-            SelfAttention3D(256)  # 添加自注意力
+            SelfAttention3D(256, time_emb_dim)  # 添加自注意力
         )
         
         # 中间层
         self.middle = CustomSequential(
             ResidualBlock(256, 256, time_emb_dim),
-            SelfAttention3D(256),  # 添加自注意力
+            SelfAttention3D(256, time_emb_dim),  # 添加自注意力
             ResidualBlock(256, 256, time_emb_dim),
-            SelfAttention3D(256)  # 添加自注意力
+            SelfAttention3D(256, time_emb_dim)  # 添加自注意力
         )
         
         # 上采样路径
         self.up3 = CustomSequential(
             nn.ConvTranspose3d(256, 128, 4, stride=2, padding=1),  # 上采样
             ResidualBlock(128, 128, time_emb_dim),
-            SelfAttention3D(128)  # 添加自注意力
+            SelfAttention3D(128, time_emb_dim)  # 添加自注意力
         )
         self.up2 = CustomSequential(
             nn.ConvTranspose3d(128, 32, 4, stride=2, padding=1),
             ResidualBlock(32, 32, time_emb_dim),
-            SelfAttention3D(32)  # 添加自注意力
+            SelfAttention3D(32, time_emb_dim)  # 添加自注意力
         )
         self.up1 = CustomSequential(
             ResidualBlock(32, 32, time_emb_dim),
-            SelfAttention3D(32),  # 添加自注意力
+            SelfAttention3D(32, time_emb_dim),  # 添加自注意力
             nn.Conv3d(32, in_channels, 3, padding=1)  # 输出层
         )
     
