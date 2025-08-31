@@ -60,31 +60,31 @@ class DiffusionModelWithText:
         :return: 当前损失值
         """
         try:
-            print("开始训练步骤")
+            # print("开始训练步骤")
             self.model.train()
             x_0 = batch['voxels'].to(self.device)
             texts = batch['texts']
-            print(f"数据加载完成，体素形状: {x_0.shape}，文本数量: {len(texts)}")
+            # print(f"数据加载完成，体素形状: {x_0.shape}，文本数量: {len(texts)}")
             t = torch.randint(0, self.T, (x_0.shape[0],)).to(self.device)
-            print(f"时间步生成完成，t形状: {t.shape}")
+            # print(f"时间步生成完成，t形状: {t.shape}")
             
             # 前向扩散
             x_t, noise = self.forward_diffusion(x_0, t)
             
             # 预测噪声
             predicted_noise = self.model(x_t, t, texts)
-            print(f"噪声预测完成，预测噪声形状: {predicted_noise.shape}")
+            # print(f"噪声预测完成，预测噪声形状: {predicted_noise.shape}")
             
             # 计算损失
             loss = F.mse_loss(predicted_noise, noise)
-            print(f"损失计算完成，损失值: {loss.item()}")
+            # print(f"损失计算完成，损失值: {loss.item()}")
             
             # 反向传播
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
             
-            print("训练步骤完成")
+            # print("训练步骤完成")
             return loss.item()
         except Exception as e:
             print(f"训练步骤执行失败: {e}")

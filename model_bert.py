@@ -171,7 +171,7 @@ class ResidualBlock(nn.Module):
             self.time_mlp = nn.Linear(time_emb_dim, out_channels)
             # 添加文本条件MLP
             self.text_mlp = nn.Linear(time_emb_dim, out_channels)
-            print("ResidualBlock各层初始化完成")
+            # print("ResidualBlock各层初始化完成")
         except Exception as e:
             print(f"ResidualBlock初始化失败: {e}")
             print(f"错误详情: {traceback.format_exc()}")
@@ -193,9 +193,10 @@ class ResidualBlock(nn.Module):
             if text_emb is not None:
                 text_cond = self.text_mlp(F.silu(text_emb)).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
                 h = h + text_cond
-                print(f"ResidualBlock处理完成，包含文本条件，输出形状: {h.shape}")
+                # print(f"ResidualBlock处理完成，包含文本条件，输出形状: {h.shape}")
             else:
-                print(f"ResidualBlock处理完成，无文本条件，输出形状: {h.shape}")
+                # print(f"ResidualBlock处理完成，无文本条件，输出形状: {h.shape}")
+                pass
                 
             return h + x  # 残差连接
         except Exception as e:
@@ -230,44 +231,44 @@ class SelfAttention3D(nn.Module):
     def forward(self, x, t=None, text_emb=None):
         try:
             batch, channels, depth, height, width = x.size()
-            print(f"SelfAttention3D处理，输入形状: B={batch}, C={channels}, D={depth}, H={height}, W={width}")
+            # print(f"SelfAttention3D处理，输入形状: B={batch}, C={channels}, D={depth}, H={height}, W={width}")
             
             # 如果提供了文本嵌入，则使用交叉注意力
             if text_emb is not None:
-                print("使用交叉注意力机制")
+                # print("使用交叉注意力机制")
                 # 投影文本嵌入
                 text_key = self.text_key_proj(text_emb)   # [B, channels // 8]
                 text_value = self.text_value_proj(text_emb)  # [B, channels]
-                print(f"文本嵌入投影完成，text_key形状: {text_key.shape}，text_value形状: {text_value.shape}")
+                # print(f"文本嵌入投影完成，text_key形状: {text_key.shape}，text_value形状: {text_value.shape}")
                 
                 # 重塑文本嵌入以匹配注意力计算
                 text_key = text_key.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(-1, -1, depth, height, width)
                 text_value = text_value.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(-1, -1, depth, height, width)
-                print(f"文本嵌入重塑完成，text_key形状: {text_key.shape}，text_value形状: {text_value.shape}")
+                # print(f"文本嵌入重塑完成，text_key形状: {text_key.shape}，text_value形状: {text_value.shape}")
                 
                 # 计算query
                 query = self.query(x).view(batch, -1, depth * height * width).permute(0, 2, 1)
-                print(f"query计算完成，形状: {query.shape}")
+                # print(f"query计算完成，形状: {query.shape}")
                 
                 # 计算key并结合文本信息
                 img_key = self.key(x).view(batch, -1, depth * height * width)
                 text_key = text_key.view(batch, -1, depth * height * width)
                 combined_key = img_key + text_key
-                print(f"key计算完成，img_key形状: {img_key.shape}，combined_key形状: {combined_key.shape}")
+                # print(f"key计算完成，img_key形状: {img_key.shape}，combined_key形状: {combined_key.shape}")
                 
                 # 计算注意力权重
                 attention = torch.softmax(torch.bmm(query, combined_key), dim=-1)
-                print(f"注意力权重计算完成，形状: {attention.shape}")
+                # print(f"注意力权重计算完成，形状: {attention.shape}")
                 
                 # 计算value并结合文本信息
                 img_value = self.value(x).view(batch, -1, depth * height * width)
                 text_value = text_value.view(batch, -1, depth * height * width)
                 combined_value = img_value + text_value
-                print(f"value计算完成，img_value形状: {img_value.shape}，combined_value形状: {combined_value.shape}")
+                # print(f"value计算完成，img_value形状: {img_value.shape}，combined_value形状: {combined_value.shape}")
                 
                 # 应用注意力权重
                 out = torch.bmm(combined_value, attention.permute(0, 2, 1)).view(batch, channels, depth, height, width)
-                print(f"注意力应用完成，输出形状: {out.shape}")
+                # print(f"注意力应用完成，输出形状: {out.shape}")
             else:
                 print("使用标准自注意力机制")
                 # 标准自注意力机制
@@ -276,10 +277,10 @@ class SelfAttention3D(nn.Module):
                 attention = torch.softmax(torch.bmm(query, key), dim=-1)
                 value = self.value(x).view(batch, -1, depth * height * width)
                 out = torch.bmm(value, attention.permute(0, 2, 1)).view(batch, channels, depth, height, width)
-                print(f"标准自注意力完成，输出形状: {out.shape}")
+                # print(f"标准自注意力完成，输出形状: {out.shape}")
                 
             result = self.gamma * out + x
-            print(f"SelfAttention3D处理完成，最终输出形状: {result.shape}")
+            # print(f"SelfAttention3D处理完成，最终输出形状: {result.shape}")
             return result
         except Exception as e:
             print(f"SelfAttention3D forward出错: {e}")

@@ -22,11 +22,11 @@ from torch.utils.data import DataLoader
 # 配置参数
 DATA_DIR = "blocks"         # HDF5数据目录
 SAVE_DIR = "checkpoints_bert"    # 模型保存目录
-BATCH_SIZE = 1             # 批量大小（根据显存调整）
+BATCH_SIZE = 2             # 批量大小（根据显存调整）
 RESOLUTION = 32             # 体素分辨率
-EPOCHS = 1                # 训练轮数
-SAVE_INTERVAL = 1          # 模型保存间隔
-NON_BERT_MODEL_PATH = "checkpoints/diffusion_20250824_1927_epoch200.pt"  # 无约束模型路径
+EPOCHS = 50                # 训练轮数
+SAVE_INTERVAL = 10          # 模型保存间隔
+NON_BERT_MODEL_PATH = "diffusion_20250824_1927_epoch200.pt"  # 无约束模型路径
 UNFREEZE_BERT = True       # 是否解冻BERT参数
 
 print(f"训练配置: 数据目录={DATA_DIR}, 保存目录={SAVE_DIR}, 批量大小={BATCH_SIZE}")
@@ -242,7 +242,7 @@ def main(rank, world_size, use_cuda=True):
             
             total_loss = 0
             dataloader_len = len(dataloader)
-            print(f"[进程 {rank}] Epoch {epoch+1}/{EPOCHS} 开始，共 {dataloader_len} 个批次")
+            # print(f"[进程 {rank}] Epoch {epoch+1}/{EPOCHS} 开始，共 {dataloader_len} 个批次")
             
             if dataloader_len == 0:
                 print(f"[进程 {rank}] 警告: 数据加载器为空")
@@ -270,7 +270,7 @@ def main(rank, world_size, use_cuda=True):
                         cleanup()
                     return
             
-            print(f"[进程 {rank}] Epoch {epoch+1}/{EPOCHS} 完成，处理了 {batch_count} 个批次")
+            # print(f"[进程 {rank}] Epoch {epoch+1}/{EPOCHS} 完成，处理了 {batch_count} 个批次")
             
             # 更新学习率
             if scheduler is not None:
@@ -278,7 +278,7 @@ def main(rank, world_size, use_cuda=True):
                     old_lr = optimizer.param_groups[0]['lr']
                     scheduler.step()
                     new_lr = optimizer.param_groups[0]['lr']
-                    print(f"[进程 {rank}] 学习率从 {old_lr} 更新为 {new_lr}")
+                    # print(f"[进程 {rank}] 学习率从 {old_lr} 更新为 {new_lr}")
                 except Exception as e:
                     print(f"[进程 {rank}] 学习率更新失败: {e}")
                     print(f"[进程 {rank}] 错误详情: {traceback.format_exc()}")
@@ -294,20 +294,22 @@ def main(rank, world_size, use_cuda=True):
                         'optimizer_state_dict': optimizer.state_dict(),
                         'epoch': epoch+1,
                     }, save_path)
-                    print(f"\n[进程 {rank}] 模型已保存至 {save_path}")
+                    # print(f"\n[进程 {rank}] 模型已保存至 {save_path}")
                 except Exception as e:
                     print(f"\n[进程 {rank}] 模型保存失败: {e}")
                     print(f"[进程 {rank}] 错误详情: {traceback.format_exc()}")
             
             if rank == 0 and dataloader_len > 0:
-                print(f"[进程 {rank}] Epoch {epoch+1} 平均损失: {total_loss/dataloader_len:.4f}")
+                # print(f"[进程 {rank}] Epoch {epoch+1} 平均损失: {total_loss/dataloader_len:.4f}")
+                pass
             elif rank == 0:
-                print(f"[进程 {rank}] Epoch {epoch+1} 没有处理任何数据")
+                # print(f"[进程 {rank}] Epoch {epoch+1} 没有处理任何数据")
+                pass
         
-        print(f"[进程 {rank}] 训练完成，清理资源")
+        # print(f"[进程 {rank}] 训练完成，清理资源")
         if use_cuda and torch.cuda.is_available() and world_size > 1 and dist.is_initialized():
             cleanup()
-        print(f"[进程 {rank}] 资源清理完成")
+        # print(f"[进程 {rank}] 资源清理完成")
     except Exception as e:
         print(f"[进程 {rank}] 训练过程中发生未处理的异常: {e}")
         print(f"[进程 {rank}] 错误详情: {traceback.format_exc()}")
