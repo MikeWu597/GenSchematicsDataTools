@@ -52,11 +52,12 @@ class DiffusionModelWithText:
             print(f"错误详情: {traceback.format_exc()}")
             raise e
     
-    def train_step(self, batch, optimizer):
+    def train_step(self, batch, optimizer, gradient_clip_value=1.0):
         """
         单步训练：前向扩散 + 反向传播
         :param batch: 包含体素和文本的批次数据
         :param optimizer: 优化器
+        :param gradient_clip_value: 梯度裁剪阈值
         :return: 当前损失值
         """
         try:
@@ -82,6 +83,10 @@ class DiffusionModelWithText:
             # 反向传播
             optimizer.zero_grad()
             loss.backward()
+            
+            # 梯度裁剪，防止梯度爆炸和梯度消失
+            torch.nn.utils.clip_grad_norm_(self.model.parameters(), gradient_clip_value)
+            
             optimizer.step()
             
             # print("训练步骤完成")
