@@ -29,15 +29,14 @@ SAVE_INTERVAL = 10          # 模型保存间隔
 NON_BERT_MODEL_PATH = "diffusion_20250824_1927_epoch200.pt"  # 无约束模型路径
 UNFREEZE_BERT = True       # 是否解冻BERT参数
 GRADIENT_CLIP_VALUE = 1.0  # 梯度裁剪阈值，防止梯度爆炸和梯度消失
-ALPHA = 0.7                # MSE损失权重
-BETA = 0.3                 # Chamfer Distance损失权重
+USE_WAVELET = True         # 是否使用小波变换
 
 print(f"训练配置: 数据目录={DATA_DIR}, 保存目录={SAVE_DIR}, 批量大小={BATCH_SIZE}")
 print(f"分辨率={RESOLUTION}, 训练轮数={EPOCHS}, 保存间隔={SAVE_INTERVAL}")
 print(f"无约束模型路径={NON_BERT_MODEL_PATH}")
 print(f"解冻BERT参数={UNFREEZE_BERT}")
 print(f"梯度裁剪阈值={GRADIENT_CLIP_VALUE}")
-print(f"MSE损失权重={ALPHA}, Chamfer Distance损失权重={BETA}")
+print(f"使用小波变换={USE_WAVELET}")
 
 def setup(rank, world_size):
     try:
@@ -135,7 +134,7 @@ def main(rank, world_size, use_cuda=True):
         # 初始化模型
         print(f"[进程 {rank}] 初始化模型")
         try:
-            model = UNet3DHybrid(freeze_bert=not UNFREEZE_BERT).to(device)
+            model = UNet3DHybrid(freeze_bert=not UNFREEZE_BERT, use_wavelet=USE_WAVELET).to(device)
             print(f"[进程 {rank}] 模型初始化完成")
         except Exception as e:
             print(f"[进程 {rank}] 模型初始化失败: {e}")

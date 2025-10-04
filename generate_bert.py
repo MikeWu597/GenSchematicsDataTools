@@ -12,12 +12,12 @@ DEFAULT_CHECKPOINT_PATH = "checkpoints_bert/diffusion_bert_hybrid_20250824_1927_
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"  # 自动选择设备
 
-def load_model(checkpoint_path):
+def load_model(checkpoint_path, use_wavelet=False):
     """加载训练好的模型"""
     print(f"开始加载模型，设备: {DEVICE}")
     
     try:
-        model = UNet3DHybrid()
+        model = UNet3DHybrid(use_wavelet=use_wavelet)
         print("UNet3DHybrid模型初始化完成")
     except Exception as e:
         print(f"模型初始化失败: {e}")
@@ -39,15 +39,16 @@ def load_model(checkpoint_path):
     
     return model
 
-def generate_and_save(model_path, text_prompt, output_dir="generated_bert"):
+def generate_and_save(model_path, text_prompt, output_dir="generated_bert", use_wavelet=True):
     """
     根据文本提示生成样本并保存为npy文件
     :param model_path: 模型路径
     :param text_prompt: 文本提示
     :param output_dir: 输出目录
+    :param use_wavelet: 是否使用小波变换
     """
     print(f"开始生成样本，文本提示: {text_prompt}")
-    model = load_model(model_path)
+    model = load_model(model_path, use_wavelet=use_wavelet)
     diffusion = DiffusionModelWithText(model, device=DEVICE)
     
     try:

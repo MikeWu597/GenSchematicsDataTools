@@ -6,6 +6,14 @@ from transformers import BertTokenizer, BertModel
 import os
 import traceback
 
+# 尝试导入小波变换库
+try:
+    from pytorch_wavelets import DWTForward, DWTInverse
+    WAVELET_SUPPORT = True
+except ImportError:
+    WAVELET_SUPPORT = False
+    print("警告: 未安装pytorch_wavelets库，小波变换功能将不可用")
+
 # 获取当前运行目录
 current_dir = os.getcwd()
 
@@ -171,7 +179,7 @@ class ResidualBlock(nn.Module):
             self.time_mlp = nn.Linear(time_emb_dim, out_channels)
             # 添加文本条件MLP
             self.text_mlp = nn.Linear(time_emb_dim, out_channels)
-            # print("ResidualBlock各层初始化完成")
+            print("ResidualBlock各层初始化完成")
         except Exception as e:
             print(f"ResidualBlock初始化失败: {e}")
             print(f"错误详情: {traceback.format_exc()}")
@@ -292,6 +300,248 @@ class SelfAttention3D(nn.Module):
             print(f"错误详情: {traceback.format_exc()}")
             raise e
 
+class WaveletTransform3D(nn.Module):
+    """3D小波变换模块"""
+    def __init__(self, wavelet_type='haar'):
+        super().__init__()
+        if not WAVELET_SUPPORT:
+            raise ImportError("pytorch_wavelets库未安装，无法使用小波变换功能")
+        self.wavelet_type = wavelet_type
+        # 注意：pytorch_wavelets只支持2D小波变换，我们需要对每个轴分别处理
+        self.dwt = DWTForward(J=1, mode='zero', wave=wavelet_type)
+        self.idwt = DWTInverse(mode='zero', wave=wavelet_type)
+        
+    def forward_dwt3d(self, x):
+        """3D前向小波变换"""
+        # x shape: [B, C, D, H, W]
+        batch, channels, depth, height, width = x.shape
+        
+        # 对宽度维度进行小波变换
+        x = x.view(batch * channels * depth, 1, height, width)
+        yl, yh = self.dwt(x)
+        # yl shape: [batch*channels*depth, 1, height/2, width/2]
+        # yh shape: [batch*channels*depth, 1, 3, height/2, width/2]
+        
+        width_yl = yl.view(batch, channels, depth, height//2, width//2)
+        width_yh = [y.view(batch, channels, depth, 3, height//2, width//2) for y in yh]
+        
+        # 对高度维度进行小波变换
+        x = width_yl.view(batch * channels, depth, height//2, width//2)
+        x = x.permute(0, 2, 1, 3).contiguous()  # [batch*channels, height/2, depth, width/2]
+        x = x.view(batch * channels * (height//2), 1, depth, width//2)
+        yl, yh = self.dwt(x)
+        height_yl = yl.view(batch, channels, height//4, depth, width//2)
+        height_yl = height_yl.permute(0, 1, 3, 2, 4).contiguous()  # [batch, channels, depth, height/4, width/2]
+        height_yh = [y.view(batch, channels, 3, depth, width//2) for y in yh]
+        height_yh = [y.permute(0, 1, 3, 2, 4).contiguous() for y in height_yh]  # [batch, channels, depth, 3, width/2]
+        
+        # 对深度维度进行小波变换
+        x = height_yl.view(batch * channels, depth, height//4, width//2)
+        x = x.permute(0, 3, 1, 2).contiguous()  # [batch*channels, width/2, depth, height/4]
+        x = x.view(batch * channels * (width//2), 1, depth, height//4)
+        yl, yh = self.dwt(x)
+        depth_yl = yl.view(batch, channels, width//2, depth//2, height//4)
+        depth_yl = depth_yl.permute(0, 1, 3, 4, 2).contiguous()  # [batch, channels, depth/2, height/4, width/2]
+        depth_yh = [y.view(batch, channels, 3, depth//2, height//4) for y in yh]
+        depth_yh = [y.permute(0, 1, 3, 4, 2).contiguous() for y in depth_yh]  # [batch, channels, depth/2, height/4, width/2]
+        
+        # 返回低频部分和高频部分
+        return depth_yl, [depth_yh, height_yh, width_yh]
+    
+    def forward_idwt3d(self, yl, yh):
+        """3D逆向小波变换"""
+        # yl shape: [batch, channels, depth/2, height/4, width/2]
+        # yh: [depth_yh, height_yh, width_yh]
+        batch, channels, depth, height, width = yl.shape
+        
+        # 对深度维度进行逆小波变换
+        x = yl.permute(0, 1, 4, 2, 3).contiguous()  # [batch, channels, width/2, depth/2, height/4]
+        x = x.view(batch * channels * (width//2), 1, depth*2, height*4)
+        yh_depth = yh[0][0].permute(0, 1, 4, 2, 3).contiguous()
+        yh_depth = yh_depth.view(batch * channels * (width//2), 3, depth*2, height*4)
+        x = self.idwt((x, [yh_depth]))
+        x = x.view(batch, channels, width//2, depth, height*2)
+        x = x.permute(0, 1, 3, 4, 2).contiguous()  # [batch, channels, depth, height*2, width/2]
+        
+        # 对高度维度进行逆小波变换
+        x = x.view(batch * channels, depth, height*2, width//2)
+        x = x.permute(0, 3, 1, 2).contiguous()  # [batch*channels, width/2, depth, height*2]
+        x = x.view(batch * channels * (width//2), 1, depth, height*2)
+        yh_height = yh[1][0].permute(0, 1, 4, 2, 3).contiguous()
+        yh_height = yh_height.view(batch * channels * (width//2), 3, depth, height*2)
+        x = self.idwt((x, [yh_height]))
+        x = x.view(batch, channels, width//2, depth, height*4)
+        x = x.permute(0, 1, 3, 4, 2).contiguous()  # [batch, channels, depth, height*4, width/2]
+        
+        # 对宽度维度进行逆小波变换
+        x = x.view(batch * channels * depth, height*4, width//2)
+        x = x.permute(0, 2, 1).contiguous()  # [batch*channels*depth, width/2, height*4]
+        x = x.view(batch * channels * depth, 1, height*4, width//2)
+        yh_width = yh[2][0].view(batch * channels * depth, 3, height*4, width//2)
+        x = self.idwt((x, [yh_width]))
+        x = x.view(batch, channels, depth, height*4, width)
+        
+        return x
+
+class ResidualBlockWavelet(nn.Module):
+    """带小波变换的3D残差块，支持文本条件"""
+    def __init__(self, in_channels, out_channels, time_emb_dim):
+        super().__init__()
+        print(f"初始化ResidualBlockWavelet，输入通道: {in_channels}，输出通道: {out_channels}，时间嵌入维度: {time_emb_dim}")
+        try:
+            self.conv1 = nn.Conv3d(in_channels, out_channels, 3, padding=1)
+            self.norm1 = nn.GroupNorm(8, out_channels)
+            self.conv2 = nn.Conv3d(out_channels, out_channels, 3, padding=1)
+            self.norm2 = nn.GroupNorm(8, out_channels)
+            self.time_mlp = nn.Linear(time_emb_dim, out_channels)
+            # 添加文本条件MLP
+            self.text_mlp = nn.Linear(time_emb_dim, out_channels)
+            # 添加小波变换模块
+            if WAVELET_SUPPORT:
+                self.wavelet_transform = WaveletTransform3D()
+            print("ResidualBlockWavelet各层初始化完成")
+        except Exception as e:
+            print(f"ResidualBlockWavelet初始化失败: {e}")
+            print(f"错误详情: {traceback.format_exc()}")
+            raise e
+        
+    def forward(self, x, t, text_emb=None):
+        try:
+            # 应用小波变换（如果支持）
+            if WAVELET_SUPPORT:
+                yl, yh = self.wavelet_transform.forward_dwt3d(x)
+                # 将小波系数合并回输入形状
+                x_wavelet = self.wavelet_transform.forward_idwt3d(yl, yh)
+                x_input = x_wavelet
+            else:
+                x_input = x
+            
+            h = self.conv1(x_input)
+            h = self.norm1(h)
+            h = F.silu(h)
+            h = self.conv2(h)
+            h = self.norm2(h)
+            
+            # 时间嵌入处理
+            t_emb = self.time_mlp(F.silu(t)).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+            h = h + t_emb
+            
+            # 文本条件处理
+            if text_emb is not None:
+                text_cond = self.text_mlp(F.silu(text_emb)).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
+                h = h + text_cond
+                # print(f"ResidualBlockWavelet处理完成，包含文本条件，输出形状: {h.shape}")
+            else:
+                # print(f"ResidualBlockWavelet处理完成，无文本条件，输出形状: {h.shape}")
+                pass
+                
+            return h + x  # 残差连接
+        except Exception as e:
+            print(f"ResidualBlockWavelet forward出错: {e}")
+            print(f"输入x形状: {x.shape}, t形状: {t.shape}")
+            print(f"是否有文本嵌入: {text_emb is not None}")
+            if text_emb is not None:
+                print(f"文本嵌入形状: {text_emb.shape}")
+            print(f"错误详情: {traceback.format_exc()}")
+            raise e
+
+class SelfAttention3DWavelet(nn.Module):
+    """带小波变换的3D自注意力机制"""
+    def __init__(self, channels, text_emb_dim=256):
+        super().__init__()
+        print(f"初始化SelfAttention3DWavelet，通道数: {channels}，文本嵌入维度: {text_emb_dim}")
+        try:
+            self.query = nn.Conv3d(channels, channels // 8, 1)
+            self.key = nn.Conv3d(channels, channels // 8, 1)
+            self.value = nn.Conv3d(channels, channels, 1)
+            self.gamma = nn.Parameter(torch.zeros(1))
+            
+            # 添加文本条件投影层
+            self.text_key_proj = nn.Linear(text_emb_dim, channels // 8)
+            self.text_value_proj = nn.Linear(text_emb_dim, channels)
+            
+            # 添加小波变换模块（如果支持）
+            if WAVELET_SUPPORT:
+                self.wavelet_transform = WaveletTransform3D()
+            print("SelfAttention3DWavelet各层初始化完成")
+        except Exception as e:
+            print(f"SelfAttention3DWavelet初始化失败: {e}")
+            print(f"错误详情: {traceback.format_exc()}")
+            raise e
+
+    def forward(self, x, t=None, text_emb=None):
+        try:
+            batch, channels, depth, height, width = x.size()
+            # print(f"SelfAttention3DWavelet处理，输入形状: B={batch}, C={channels}, D={depth}, H={height}, W={width}")
+            
+            # 应用小波变换（如果支持）
+            if WAVELET_SUPPORT:
+                yl, yh = self.wavelet_transform.forward_dwt3d(x)
+                # 将小波系数合并回输入形状
+                x_wavelet = self.wavelet_transform.forward_idwt3d(yl, yh)
+                x_input = x_wavelet
+            else:
+                x_input = x
+            
+            # 如果提供了文本嵌入，则使用交叉注意力
+            if text_emb is not None:
+                # print("使用交叉注意力机制")
+                # 投影文本嵌入
+                text_key = self.text_key_proj(text_emb)   # [B, channels // 8]
+                text_value = self.text_value_proj(text_emb)  # [B, channels]
+                # print(f"文本嵌入投影完成，text_key形状: {text_key.shape}，text_value形状: {text_value.shape}")
+                
+                # 重塑文本嵌入以匹配注意力计算
+                text_key = text_key.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(-1, -1, depth, height, width)
+                text_value = text_value.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(-1, -1, depth, height, width)
+                # print(f"文本嵌入重塑完成，text_key形状: {text_key.shape}，text_value形状: {text_value.shape}")
+                
+                # 计算query
+                query = self.query(x_input).view(batch, -1, depth * height * width).permute(0, 2, 1)
+                # print(f"query计算完成，形状: {query.shape}")
+                
+                # 计算key并结合文本信息
+                img_key = self.key(x_input).view(batch, -1, depth * height * width)
+                text_key = text_key.view(batch, -1, depth * height * width)
+                combined_key = img_key + text_key
+                # print(f"key计算完成，img_key形状: {img_key.shape}，combined_key形状: {combined_key.shape}")
+                
+                # 计算注意力权重
+                attention = torch.softmax(torch.bmm(query, combined_key), dim=-1)
+                # print(f"注意力权重计算完成，形状: {attention.shape}")
+                
+                # 计算value并结合文本信息
+                img_value = self.value(x_input).view(batch, -1, depth * height * width)
+                text_value = text_value.view(batch, -1, depth * height * width)
+                combined_value = img_value + text_value
+                # print(f"value计算完成，img_value形状: {img_value.shape}，combined_value形状: {combined_value.shape}")
+                
+                # 应用注意力权重
+                out = torch.bmm(combined_value, attention.permute(0, 2, 1)).view(batch, channels, depth, height, width)
+                # print(f"注意力应用完成，输出形状: {out.shape}")
+            else:
+                print("使用标准自注意力机制")
+                # 标准自注意力机制
+                query = self.query(x_input).view(batch, -1, depth * height * width).permute(0, 2, 1)
+                key = self.key(x_input).view(batch, -1, depth * height * width)
+                attention = torch.softmax(torch.bmm(query, key), dim=-1)
+                value = self.value(x_input).view(batch, -1, depth * height * width)
+                out = torch.bmm(value, attention.permute(0, 2, 1)).view(batch, channels, depth, height, width)
+                # print(f"标准自注意力完成，输出形状: {out.shape}")
+                
+            result = self.gamma * out + x
+            # print(f"SelfAttention3DWavelet处理完成，最终输出形状: {result.shape}")
+            return result
+        except Exception as e:
+            print(f"SelfAttention3DWavelet forward出错: {e}")
+            print(f"输入x形状: {x.shape}")
+            print(f"是否有时间信息: {t is not None}")
+            print(f"是否有文本嵌入: {text_emb is not None}")
+            if text_emb is not None:
+                print(f"文本嵌入形状: {text_emb.shape}")
+            print(f"错误详情: {traceback.format_exc()}")
+            raise e
+
 class UNet3DWithText(nn.Module):
     """带文本条件的3D UNet网络结构"""
     def __init__(self, in_channels=1, time_emb_dim=256, freeze_bert=True):
@@ -374,8 +624,9 @@ class UNet3DWithText(nn.Module):
 
 class UNet3DHybrid(nn.Module):
     """混合模型，结合了BERT文本条件和无文本条件的模型"""
-    def __init__(self, in_channels=1, time_emb_dim=256, freeze_bert=True):
+    def __init__(self, in_channels=1, time_emb_dim=256, freeze_bert=True, use_wavelet=False):
         super().__init__()
+        self.use_wavelet = use_wavelet and WAVELET_SUPPORT
         # 文本编码器
         self.text_encoder = TextEncoder(model_name='hfl/chinese-bert-wwm-ext', freeze_bert=freeze_bert)
         
@@ -386,45 +637,49 @@ class UNet3DHybrid(nn.Module):
             nn.SiLU()
         )
         
+        # 根据是否使用小波变换选择模块
+        residual_block_class = ResidualBlockWavelet if self.use_wavelet else ResidualBlock
+        attention_class = SelfAttention3DWavelet if self.use_wavelet else SelfAttention3D
+        
         # 下采样路径
         self.down1 = CustomSequential(
-            ResidualBlock(in_channels, 32, time_emb_dim),
-            ResidualBlock(32, 32, time_emb_dim),
-            SelfAttention3D(32, time_emb_dim)  # 添加自注意力
+            residual_block_class(in_channels, 32, time_emb_dim),
+            residual_block_class(32, 32, time_emb_dim),
+            attention_class(32, time_emb_dim)  # 添加自注意力
         )
         self.down2 = CustomSequential(
             nn.Conv3d(32, 128, 3, stride=2, padding=1),  # 下采样
-            ResidualBlock(128, 128, time_emb_dim),
-            SelfAttention3D(128, time_emb_dim)  # 添加自注意力
+            residual_block_class(128, 128, time_emb_dim),
+            attention_class(128, time_emb_dim)  # 添加自注意力
         )
         self.down3 = CustomSequential(
             nn.Conv3d(128, 256, 3, stride=2, padding=1),
-            ResidualBlock(256, 256, time_emb_dim),
-            SelfAttention3D(256, time_emb_dim)  # 添加自注意力
+            residual_block_class(256, 256, time_emb_dim),
+            attention_class(256, time_emb_dim)  # 添加自注意力
         )
         
         # 中间层
         self.middle = CustomSequential(
-            ResidualBlock(256, 256, time_emb_dim),
-            SelfAttention3D(256, time_emb_dim),  # 添加自注意力
-            ResidualBlock(256, 256, time_emb_dim),
-            SelfAttention3D(256, time_emb_dim)  # 添加自注意力
+            residual_block_class(256, 256, time_emb_dim),
+            attention_class(256, time_emb_dim),  # 添加自注意力
+            residual_block_class(256, 256, time_emb_dim),
+            attention_class(256, time_emb_dim)  # 添加自注意力
         )
         
         # 上采样路径
         self.up3 = CustomSequential(
             nn.ConvTranspose3d(256, 128, 4, stride=2, padding=1),  # 上采样
-            ResidualBlock(128, 128, time_emb_dim),
-            SelfAttention3D(128, time_emb_dim)  # 添加自注意力
+            residual_block_class(128, 128, time_emb_dim),
+            attention_class(128, time_emb_dim)  # 添加自注意力
         )
         self.up2 = CustomSequential(
             nn.ConvTranspose3d(128, 32, 4, stride=2, padding=1),
-            ResidualBlock(32, 32, time_emb_dim),
-            SelfAttention3D(32, time_emb_dim)  # 添加自注意力
+            residual_block_class(32, 32, time_emb_dim),
+            attention_class(32, time_emb_dim)  # 添加自注意力
         )
         self.up1 = CustomSequential(
-            ResidualBlock(32, 32, time_emb_dim),
-            SelfAttention3D(32, time_emb_dim),  # 添加自注意力
+            residual_block_class(32, 32, time_emb_dim),
+            attention_class(32, time_emb_dim),  # 添加自注意力
             nn.Conv3d(32, in_channels, 3, padding=1)  # 输出层
         )
     
