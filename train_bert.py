@@ -29,12 +29,15 @@ SAVE_INTERVAL = 10          # 模型保存间隔
 NON_BERT_MODEL_PATH = "diffusion_20250824_1927_epoch200.pt"  # 无约束模型路径
 UNFREEZE_BERT = True       # 是否解冻BERT参数
 GRADIENT_CLIP_VALUE = 1.0  # 梯度裁剪阈值，防止梯度爆炸和梯度消失
+ALPHA = 0.7                # MSE损失权重
+BETA = 0.3                 # Chamfer Distance损失权重
 
 print(f"训练配置: 数据目录={DATA_DIR}, 保存目录={SAVE_DIR}, 批量大小={BATCH_SIZE}")
 print(f"分辨率={RESOLUTION}, 训练轮数={EPOCHS}, 保存间隔={SAVE_INTERVAL}")
 print(f"无约束模型路径={NON_BERT_MODEL_PATH}")
 print(f"解冻BERT参数={UNFREEZE_BERT}")
 print(f"梯度裁剪阈值={GRADIENT_CLIP_VALUE}")
+print(f"MSE损失权重={ALPHA}, Chamfer Distance损失权重={BETA}")
 
 def setup(rank, world_size):
     try:
@@ -257,7 +260,7 @@ def main(rank, world_size, use_cuda=True):
                 try:
                     batch_count += 1
                     batch['voxels'] = batch['voxels'].to(device)
-                    loss = diffusion.train_step(batch, optimizer, GRADIENT_CLIP_VALUE)
+                    loss = diffusion.train_step(batch, optimizer, GRADIENT_CLIP_VALUE, ALPHA, BETA)
                     total_loss += loss
                     if rank == 0:
                         progress_bar.set_postfix(loss=f"{loss:.4f}")

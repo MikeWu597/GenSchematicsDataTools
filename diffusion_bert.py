@@ -3,6 +3,7 @@ import numpy as np
 from tqdm import tqdm
 import torch.nn.functional as F
 import traceback
+from eval_metrics import chamfer_distance, voxel_to_point_cloud
 
 class DiffusionModelWithText:
     def __init__(self, model, betas=(1e-4, 0.02), device="cuda"):
@@ -52,12 +53,14 @@ class DiffusionModelWithText:
             print(f"错误详情: {traceback.format_exc()}")
             raise e
     
-    def train_step(self, batch, optimizer, gradient_clip_value=1.0):
+    def train_step(self, batch, optimizer, gradient_clip_value=1.0, alpha=0.7, beta=0.3):
         """
         单步训练：前向扩散 + 反向传播
         :param batch: 包含体素和文本的批次数据
         :param optimizer: 优化器
         :param gradient_clip_value: 梯度裁剪阈值
+        :param alpha: MSE损失权重
+        :param beta: Chamfer Distance损失权重
         :return: 当前损失值
         """
         try:
@@ -76,13 +79,46 @@ class DiffusionModelWithText:
             predicted_noise = self.model(x_t, t, texts)
             # print(f"噪声预测完成，预测噪声形状: {predicted_noise.shape}")
             
-            # 计算损失
-            loss = F.mse_loss(predicted_noise, noise)
-            # print(f"损失计算完成，损失值: {loss.item()}")
+            # 计算MSE损失
+            loss_mse = F.mse_loss(predicted_noise, noise)
+            
+            # 计算Chamfer Distance损失
+            # 通过模型预测去噪后的体素
+            with torch.no_grad():
+                # 使用单步去噪来获取预测的原始体素
+                alpha_t = self.alphas[t].view(-1, 1, 1, 1, 1)
+                alpha_bar_t = self.alpha_bars[t].view(-1, 1, 1, 1, 1)
+                pred_x0 = (x_t - torch.sqrt(1 - alpha_bar_t) * predicted_noise) / torch.sqrt(alpha_bar_t)
+                pred_x0 = torch.sigmoid(pred_x0)
+                
+            # 将体素转换为点云并计算Chamfer Distance
+            loss_cd = 0
+            batch_size = x_0.shape[0]
+            for i in range(batch_size):
+                # 将真实体素和预测体素转换为点云
+                gt_points = voxel_to_point_cloud(x_0[i].squeeze())
+                pred_points = voxel_to_point_cloud(pred_x0[i].squeeze())
+                
+                # 只有当两个点云都非空时才计算Chamfer Distance
+                if len(gt_points) > 0 and len(pred_points) > 0:
+                    gt_points_tensor = torch.from_numpy(gt_points).float().to(self.device).unsqueeze(0)
+                    pred_points_tensor = torch.from_numpy(pred_points).float().to(self.device).unsqueeze(0)
+                    cd = chamfer_distance(gt_points_tensor, pred_points_tensor)
+                    loss_cd += cd.mean()
+                elif len(gt_points) > 0 or len(pred_points) > 0:
+                    # 如果一个为空另一个非空，增加损失
+                    loss_cd += torch.tensor(1.0, device=self.device)
+            
+            loss_cd = loss_cd / batch_size if batch_size > 0 else torch.tensor(0.0, device=self.device)
+            
+            # 组合损失
+            total_loss = alpha * loss_mse + beta * loss_cd
+            
+            # print(f"损失计算完成，MSE损失: {loss_mse.item()}, CD损失: {loss_cd.item()}, 总损失: {total_loss.item()}")
             
             # 反向传播
             optimizer.zero_grad()
-            loss.backward()
+            total_loss.backward()
             
             # 梯度裁剪，防止梯度爆炸和梯度消失
             torch.nn.utils.clip_grad_norm_(self.model.parameters(), gradient_clip_value)
@@ -90,7 +126,7 @@ class DiffusionModelWithText:
             optimizer.step()
             
             # print("训练步骤完成")
-            return loss.item()
+            return total_loss.item()
         except Exception as e:
             print(f"训练步骤执行失败: {e}")
             print(f"错误详情: {traceback.format_exc()}")
