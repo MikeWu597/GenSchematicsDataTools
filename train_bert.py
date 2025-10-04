@@ -30,6 +30,8 @@ NON_BERT_MODEL_PATH = "diffusion_20250824_1927_epoch200.pt"  # 无约束模型�
 UNFREEZE_BERT = True       # 是否解冻BERT参数
 GRADIENT_CLIP_VALUE = 1.0  # 梯度裁剪阈值，防止梯度爆炸和梯度消失
 USE_WAVELET = True         # 是否使用小波变换
+ALPHA = 0.7                # MSE损失权重
+BETA = 0.3                 # Chamfer Distance损失权重
 
 print(f"训练配置: 数据目录={DATA_DIR}, 保存目录={SAVE_DIR}, 批量大小={BATCH_SIZE}")
 print(f"分辨率={RESOLUTION}, 训练轮数={EPOCHS}, 保存间隔={SAVE_INTERVAL}")
@@ -37,6 +39,8 @@ print(f"无约束模型路径={NON_BERT_MODEL_PATH}")
 print(f"解冻BERT参数={UNFREEZE_BERT}")
 print(f"梯度裁剪阈值={GRADIENT_CLIP_VALUE}")
 print(f"使用小波变换={USE_WAVELET}")
+print(f"MSE损失权重={ALPHA}, Chamfer Distance损失权重={BETA}")
+
 
 def setup(rank, world_size):
     try:

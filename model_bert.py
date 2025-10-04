@@ -21,6 +21,8 @@ current_dir = os.getcwd()
 DEFAULT_BERT_PATH = os.path.join(current_dir, "checkpoints", "bert-base-chinese")
 DEFAULT_NON_BERT_MODEL_PATH = os.path.join(current_dir, "checkpoints", "diffusion_20250824_1927_epoch200.pt")
 
+TEXT_FACTOR = 2.5
+
 print(f"当前工作目录: {current_dir}")
 print(f"默认BERT路径: {DEFAULT_BERT_PATH}")
 print(f"默认非BERT模型路径: {DEFAULT_NON_BERT_MODEL_PATH}")
@@ -200,7 +202,7 @@ class ResidualBlock(nn.Module):
             # 文本条件处理
             if text_emb is not None:
                 text_cond = self.text_mlp(F.silu(text_emb)).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
-                h = h + text_cond
+                h = h + TEXT_FACTOR * text_cond
                 # print(f"ResidualBlock处理完成，包含文本条件，输出形状: {h.shape}")
             else:
                 # print(f"ResidualBlock处理完成，无文本条件，输出形状: {h.shape}")
@@ -245,8 +247,8 @@ class SelfAttention3D(nn.Module):
             if text_emb is not None:
                 # print("使用交叉注意力机制")
                 # 投影文本嵌入
-                text_key = self.text_key_proj(text_emb)   # [B, channels // 8]
-                text_value = self.text_value_proj(text_emb)  # [B, channels]
+                text_key = self.text_key_proj(text_emb) * TEXT_FACTOR   # [B, channels // 8]
+                text_value = self.text_value_proj(text_emb) * TEXT_FACTOR  # [B, channels]
                 # print(f"文本嵌入投影完成，text_key形状: {text_key.shape}，text_value形状: {text_value.shape}")
                 
                 # 重塑文本嵌入以匹配注意力计算
@@ -429,7 +431,7 @@ class ResidualBlockWavelet(nn.Module):
             # 文本条件处理
             if text_emb is not None:
                 text_cond = self.text_mlp(F.silu(text_emb)).unsqueeze(-1).unsqueeze(-1).unsqueeze(-1)
-                h = h + text_cond
+                h = h + TEXT_FACTOR * text_cond
                 # print(f"ResidualBlockWavelet处理完成，包含文本条件，输出形状: {h.shape}")
             else:
                 # print(f"ResidualBlockWavelet处理完成，无文本条件，输出形状: {h.shape}")
@@ -487,8 +489,8 @@ class SelfAttention3DWavelet(nn.Module):
             if text_emb is not None:
                 # print("使用交叉注意力机制")
                 # 投影文本嵌入
-                text_key = self.text_key_proj(text_emb)   # [B, channels // 8]
-                text_value = self.text_value_proj(text_emb)  # [B, channels]
+                text_key = self.text_key_proj(text_emb) * TEXT_FACTOR   # [B, channels // 8]
+                text_value = self.text_value_proj(text_emb) * TEXT_FACTOR  # [B, channels]
                 # print(f"文本嵌入投影完成，text_key形状: {text_key.shape}，text_value形状: {text_value.shape}")
                 
                 # 重塑文本嵌入以匹配注意力计算
