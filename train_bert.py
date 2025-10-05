@@ -6,6 +6,7 @@ from torch.utils.data.distributed import DistributedSampler
 from datetime import datetime
 import traceback
 import sys
+import random
 
 # 导入数据加载器
 from data_loader_bert import get_text_dataloader, MinecraftTextDataset
@@ -17,7 +18,7 @@ from tqdm import tqdm
 import torch.multiprocessing as mp
 
 # 添加 DataLoader 导入
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 # 配置参数
 DATA_DIR = "blocks"         # HDF5数据目录
@@ -32,6 +33,7 @@ GRADIENT_CLIP_VALUE = 1.0  # 梯度裁剪阈值，防止梯度爆炸和梯度消
 USE_WAVELET = True         # 是否使用小波变换
 ALPHA = 0.7                # MSE损失权重
 BETA = 0.3                 # Chamfer Distance损失权重
+VALIDATION_RATIO = 0.15    # 验证集比例
 
 print(f"训练配置: 数据目录={DATA_DIR}, 保存目录={SAVE_DIR}, 批量大小={BATCH_SIZE}")
 print(f"分辨率={RESOLUTION}, 训练轮数={EPOCHS}, 保存间隔={SAVE_INTERVAL}")
@@ -40,6 +42,7 @@ print(f"解冻BERT参数={UNFREEZE_BERT}")
 print(f"梯度裁剪阈值={GRADIENT_CLIP_VALUE}")
 print(f"使用小波变换={USE_WAVELET}")
 print(f"MSE损失权重={ALPHA}, Chamfer Distance损失权重={BETA}")
+print(f"验证集比例={VALIDATION_RATIO}")
 
 
 def setup(rank, world_size):
@@ -67,6 +70,31 @@ def cleanup():
         print(f"清理分布式训练环境失败: {e}")
         print(f"错误详情: {traceback.format_exc()}")
 
+def evaluate_model(model, val_dataloader, diffusion, device, alpha=ALPHA, beta=BETA):
+    """
+    在验证集上评估模型性能
+    :param model: 模型
+    :param val_dataloader: 验证集数据加载器
+    :param diffusion: 扩散模型
+    :param device: 设备
+    :param alpha: MSE损失权重
+    :param beta: Chamfer Distance损失权重
+    :return: 平均验证损失
+    """
+    model.eval()
+    total_val_loss = 0
+    val_batches = 0
+    
+    with torch.no_grad():
+        for batch in val_dataloader:
+            batch['voxels'] = batch['voxels'].to(device)
+            val_loss = diffusion.compute_loss(batch, alpha, beta)
+            total_val_loss += val_loss
+            val_batches += 1
+    
+    avg_val_loss = total_val_loss / val_batches if val_batches > 0 else float('inf')
+    return avg_val_loss
+
 def main(rank, world_size, use_cuda=True):
     try:
         device = torch.device(f"cuda:{rank}" if use_cuda and torch.cuda.is_available() else "cpu")
@@ -86,8 +114,22 @@ def main(rank, world_size, use_cuda=True):
         print(f"[进程 {rank}] 数据目录 {DATA_DIR} 存在")
         
         try:
-            dataset = MinecraftTextDataset(DATA_DIR, RESOLUTION)
-            print(f"[进程 {rank}] 数据集加载完成，共 {len(dataset)} 个样本")
+            full_dataset = MinecraftTextDataset(DATA_DIR, RESOLUTION)
+            print(f"[进程 {rank}] 数据集加载完成，共 {len(full_dataset)} 个样本")
+            
+            # 分割训练集和验证集
+            dataset_size = len(full_dataset)
+            indices = list(range(dataset_size))
+            random.shuffle(indices)
+            
+            val_size = int(dataset_size * VALIDATION_RATIO)
+            train_indices = indices[val_size:]
+            val_indices = indices[:val_size]
+            
+            dataset = Subset(full_dataset, train_indices)
+            val_dataset = Subset(full_dataset, val_indices)
+            
+            print(f"[进程 {rank}] 数据集分割完成，训练集大小: {len(dataset)}, 验证集大小: {len(val_dataset)}")
         except Exception as e:
             print(f"[进程 {rank}] 数据集加载失败: {e}")
             print(f"[进程 {rank}] 错误详情: {traceback.format_exc()}")
@@ -109,6 +151,18 @@ def main(rank, world_size, use_cuda=True):
                         'texts': [item['text'] for item in batch]
                     }
                 )
+                
+                # 创建验证集数据加载器
+                val_dataloader = DataLoader(
+                    val_dataset,
+                    batch_size=BATCH_SIZE,
+                    shuffle=False,
+                    num_workers=0,
+                    collate_fn=lambda batch: {
+                        'voxels': torch.stack([item['voxel'] for item in batch]),
+                        'texts': [item['text'] for item in batch]
+                    }
+                )
                 print(f"[进程 {rank}] 分布式数据加载器初始化完成")
             except Exception as e:
                 print(f"[进程 {rank}] 分布式数据加载器初始化失败: {e}")
@@ -123,6 +177,18 @@ def main(rank, world_size, use_cuda=True):
                     dataset, 
                     batch_size=BATCH_SIZE, 
                     shuffle=True,
+                    num_workers=0,
+                    collate_fn=lambda batch: {
+                        'voxels': torch.stack([item['voxel'] for item in batch]),
+                        'texts': [item['text'] for item in batch]
+                    }
+                )
+                
+                # 创建验证集数据加载器
+                val_dataloader = DataLoader(
+                    val_dataset,
+                    batch_size=BATCH_SIZE,
+                    shuffle=False,
                     num_workers=0,
                     collate_fn=lambda batch: {
                         'voxels': torch.stack([item['voxel'] for item in batch]),
@@ -236,6 +302,9 @@ def main(rank, world_size, use_cuda=True):
                 print(f"[进程 {rank}] 模型保存目录创建失败: {e}")
                 print(f"[进程 {rank}] 错误详情: {traceback.format_exc()}")
         
+        # 初始化最佳验证损失
+        best_val_loss = float('inf')
+        
         print(f"[进程 {rank}] 开始训练循环，共 {EPOCHS} 轮")
         # 训练循环
         for epoch in range(EPOCHS):
@@ -279,6 +348,36 @@ def main(rank, world_size, use_cuda=True):
                     return
             
             # print(f"[进程 {rank}] Epoch {epoch+1}/{EPOCHS} 完成，处理了 {batch_count} 个批次")
+            
+            # 在每个epoch结束后进行验证
+            if rank == 0:  # 只在主进程中进行验证
+                try:
+                    val_loss = evaluate_model(model, val_dataloader, diffusion, device, ALPHA, BETA)
+                    avg_train_loss = total_loss / dataloader_len if dataloader_len > 0 else float('inf')
+                    print(f"[进程 {rank}] Epoch {epoch+1} 完成 - 平均训练损失: {avg_train_loss:.4f}, 验证损失: {val_loss:.4f}")
+                    
+                    # 检查是否为最佳模型
+                    if val_loss < best_val_loss:
+                        best_val_loss = val_loss
+                        # 保存最佳模型
+                        try:
+                            timestamp = datetime.now().strftime("%Y%m%d_%H%M")
+                            save_path = os.path.join(SAVE_DIR, f"diffusion_bert_hybrid_{timestamp}_best.pt")
+                            state_dict = model.module.state_dict() if use_cuda and torch.cuda.is_available() and world_size > 1 and dist.is_initialized() else model.state_dict()
+                            torch.save({
+                                'model_state_dict': state_dict,
+                                'optimizer_state_dict': optimizer.state_dict(),
+                                'epoch': epoch+1,
+                                'val_loss': val_loss,
+                                'train_loss': avg_train_loss,
+                            }, save_path)
+                            print(f"[进程 {rank}] 最佳模型已保存至 {save_path}")
+                        except Exception as e:
+                            print(f"[进程 {rank}] 最佳模型保存失败: {e}")
+                            print(f"[进程 {rank}] 错误详情: {traceback.format_exc()}")
+                except Exception as e:
+                    print(f"[进程 {rank}] 验证过程失败: {e}")
+                    print(f"[进程 {rank}] 错误详情: {traceback.format_exc()}")
             
             # 更新学习率
             if scheduler is not None:

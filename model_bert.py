@@ -21,7 +21,7 @@ current_dir = os.getcwd()
 DEFAULT_BERT_PATH = os.path.join(current_dir, "checkpoints", "bert-base-chinese")
 DEFAULT_NON_BERT_MODEL_PATH = os.path.join(current_dir, "checkpoints", "diffusion_20250824_1927_epoch200.pt")
 
-TEXT_FACTOR = 2.5
+TEXT_FACTOR = 5.0
 
 print(f"当前工作目录: {current_dir}")
 print(f"默认BERT路径: {DEFAULT_BERT_PATH}")
